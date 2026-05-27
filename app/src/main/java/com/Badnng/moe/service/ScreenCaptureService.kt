@@ -341,17 +341,7 @@ class ScreenCaptureService : Service() {
                     helper.initOcr()
                 }
 
-                val singleResult = helper.recognizeAll(bitmap, sourceApp, sourcePkg)
-                val hasExpressKeyword = singleResult.fullText.contains("\u53d6\u4ef6") ||
-                    singleResult.fullText.contains("\u53d6\u8d27") ||
-                    singleResult.fullText.contains("\u5feb\u9012") ||
-                    singleResult.fullText.contains("\u9a7f\u7ad9") ||
-                    singleResult.fullText.contains("\u83dc\u9e1f")
-                val multiResult = if (hasExpressKeyword || singleResult.type == "\u5feb\u9012") {
-                    helper.recognizeMultipleCodes(bitmap, sourceApp, sourcePkg)
-                } else {
-                    MultiRecognitionResult(emptyList(), false)
-                }
+                val (singleResult, multiResult) = helper.recognizeAllAndMultiple(bitmap, sourceApp, sourcePkg)
                 val recognizedOrders = when {
                     multiResult.hasMultipleCodes && multiResult.orders.size > 1 -> multiResult.orders
                     singleResult.code != null -> listOf(singleResult)

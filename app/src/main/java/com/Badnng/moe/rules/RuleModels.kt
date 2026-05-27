@@ -320,24 +320,32 @@ data class CodeExtractionConfig(
 data class ExpressExtraction(
     val triggerKeywords: List<String> = listOf("取件码", "取性码", "请凭", "靖凭"),
     val patterns: List<ExtractionPattern> = emptyList(),
-    val fallbackPattern: FallbackPattern? = null
+    val fallbackPattern: FallbackPattern? = null,
+    val lockerPattern: String? = null,
+    val multiFallbackPattern: String? = null
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("trigger_keywords", JSONArray(triggerKeywords))
         put("patterns", JSONArray(patterns.map { it.toJson() }))
         fallbackPattern?.let { put("fallback_pattern", it.toJson()) }
+        lockerPattern?.let { put("locker_pattern", it) }
+        multiFallbackPattern?.let { put("multi_fallback_pattern", it) }
     }
 
     fun mergeWithBuiltIn(builtIn: ExpressExtraction): ExpressExtraction = copy(
         patterns = if (patterns.isEmpty()) builtIn.patterns else patterns,
-        fallbackPattern = fallbackPattern ?: builtIn.fallbackPattern
+        fallbackPattern = fallbackPattern ?: builtIn.fallbackPattern,
+        lockerPattern = lockerPattern ?: builtIn.lockerPattern,
+        multiFallbackPattern = multiFallbackPattern ?: builtIn.multiFallbackPattern
     )
 
     companion object {
         fun fromJson(json: JSONObject): ExpressExtraction = ExpressExtraction(
             triggerKeywords = json.optJSONArray("trigger_keywords")?.let { arr -> (0 until arr.length()).map { arr.getString(it) } } ?: listOf("取件码", "取性码", "请凭", "靖凭"),
             patterns = json.optJSONArray("patterns")?.let { arr -> (0 until arr.length()).map { ExtractionPattern.fromJson(arr.getJSONObject(it)) } } ?: emptyList(),
-            fallbackPattern = json.optJSONObject("fallback_pattern")?.let { FallbackPattern.fromJson(it) }
+            fallbackPattern = json.optJSONObject("fallback_pattern")?.let { FallbackPattern.fromJson(it) },
+            lockerPattern = json.optString("locker_pattern", "").ifBlank { null },
+            multiFallbackPattern = json.optString("multi_fallback_pattern", "").ifBlank { null }
         )
     }
 }
