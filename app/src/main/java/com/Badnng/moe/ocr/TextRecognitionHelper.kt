@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.util.Log
 import com.Badnng.moe.rules.RecognitionRuleEngine
 import com.google.mlkit.vision.barcode.BarcodeScanning
-import com.google.mlkit.vision.barcode.common.Barcode
 import com.google.mlkit.vision.common.InputImage
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
@@ -23,40 +22,6 @@ class TextRecognitionHelper(private val context: Context) {
     private val foodBrands get() = engine.getAllFoodNames()
     private val expressBrandKeywords get() = engine.getAllExpressKeywords()
     private val homePageKeywords get() = engine.getHomepageKeywords()
-
-    // ── 缓存：避免每次识别都重新编译正则 ──
-    private val cachedDatetimeRegex get() = Regex(engine.rules.textCleaning.datetimePattern)
-    private val cachedSpaceCollapseRegex get() = Regex(engine.rules.textCleaning.spaceCollapse)
-
-    // isInvalidExpressCode 用到的正则（规则变更时才需刷新）
-    private val rejectPhoneRegex get() = Regex(engine.rules.validation.expressCode.rejectPhonePattern)
-    private val rejectDateRegex get() = Regex(engine.rules.validation.expressCode.rejectDatePattern)
-
-    // extractFoodCode 中的静态正则
-    private val queuePattern1 = Regex("(小桌|中桌|大桌)\\s*([A-Z]{1,2}\\d{1,3}|\\d{1,3}[A-Z]{1,2})")
-    private val queuePattern2 = Regex("([A-Z]{1,2}\\d{1,3}|\\d{1,3}[A-Z]{1,2})(?=[A-Z]{0,2}号|\\s*(?:号|桌|台|单))")
-    private val sloganPattern = Regex("([A-Z][A-Z0-9]{2,9}[.．][\\u4e00-\\u9fa5A-Za-z0-9]{2,24})")
-    private val starbucksPattern = Regex("(\\d{1,3}[.．][\\u4e00-\\u9fa5]{2,10})")
-    private val foodForwardPattern = Regex("(取单码|取单号|取餐号|取餐码|取茶号|取货码|券码|订单号|取性码|取養号)[:：]?([A-Z0-9]{3,10})")
-    private val foodReversePattern = Regex("([A-Z0-9]{3,10})[:：]?(取单码|取单号|取餐号|取餐码|取茶号|取货码|券码|订单号|取性码|取養号)")
-    private val foodCodeSimplePattern = Regex("[A-Z0-9]{3,10}")
-    private val foodCodeExactPattern = Regex("^[A-Z0-9]{3,10}$")
-    private val foodFallbackBoundPattern = Regex("(?<![a-zA-Z0-9])([A-Z0-9]{3,10})(?![a-zA-Z0-9])")
-
-    // recognizeMultipleCodes 中的静态正则
-    private val multiExpressKeywords = listOf("取件码", "取性码", "请凭", "靖凭")
-    private val multiRawCodePattern =
-        "([0-9]{1,2}-[0-9]{1,2}-[0-9]{4}|[A-Z]{1,3}[0-9]{0,3}-[0-9]{3,8}|[A-Z0-9]{1,4}-[A-Z0-9]{3,8}|[A-Z]{1,3}[0-9]{4,8}|[0-9]{4,8})"
-    private val multiCodePattern = "(?<![A-Z0-9-])$multiRawCodePattern(?![A-Z0-9-])"
-    private val multiForwardPattern = Regex("(?:${multiExpressKeywords.joinToString("|")})[:：\\s]*$multiCodePattern")
-    private val multiReversePattern = Regex("$multiCodePattern[:：\\s]*(?:${multiExpressKeywords.joinToString("|")})")
-    private val multiBrandCodePattern = Regex("取件码[:：\\s]*([A-Z0-9-]{3,12})")
-    private val multiLockerPattern get() = Regex(engine.getLockerPattern() ?: "([0-9]{1,2}-[0-9]{1,2}-[0-9]{4})[0-9]?(?![0-9])")
-    private val multiFallbackPattern get() = Regex(engine.getMultiFallbackPattern()
-        ?: "(?<![A-Za-z0-9-])(?:([0-9]{1,2}-[0-9]{1,2}-[0-9]{4})[0-9]?(?![0-9A-Za-z-])|([A-Za-z0-9]{1,4}-[A-Za-z0-9]{3,8}|[0-9]{5,8})(?![A-Za-z0-9-]))")
-
-    // truncateLocation 中的静态正则
-    private val truncateSuffixPattern = Regex("[,，。！!?;？;|\\s]+$")
 
     /**
      * 初始化 OCR 引擎（需要在应用启动时调用）
@@ -211,10 +176,12 @@ class TextRecognitionHelper(private val context: Context) {
         }
 
         // 第一步：精确从"取件码:"后截取
+        val datetimePatternStr = engine.rules.textCleaning.datetimePattern
+        val datetimeRegex = Regex(datetimePatternStr)
         for (i in blocks.indices) {
             val block = blocks[i]
             val text = block.text.replace("\n", "")
-                .replace(cachedDatetimeRegex, "")
+                .replace(datetimeRegex, "")
                 .replace(" ", "")
             Log.d("RecognitionMonitor", "ExpressBlock: [$text]")
             val matchedKeyword = expressKeywords.firstOrNull { text.contains(it) } ?: continue
@@ -260,9 +227,9 @@ class TextRecognitionHelper(private val context: Context) {
     private fun isInvalidExpressCode(value: String): Boolean {
         val vc = engine.rules.validation.expressCode
         if (vc.rejectAllLetters && value.all { it.isLetter() }) return true
-        if (rejectPhoneRegex.matches(value)) return true
+        if (Regex(vc.rejectPhonePattern).matches(value)) return true
         if (value.startsWith(vc.rejectYearPrefix) && value.length == vc.rejectYearLength) return true
-        if (rejectDateRegex.matches(value)) return true
+        if (Regex(vc.rejectDatePattern).matches(value)) return true
         if (value.length > vc.maxLength) return true
         return false
     }
@@ -295,7 +262,12 @@ class TextRecognitionHelper(private val context: Context) {
         val queueKeywords = listOf("叫号", "取号", "过号", "排队", "迎宾台", "到店就餐", "还需等待", "桌安排")
         val queueHitCount = queueKeywords.count { mergedText.contains(it) }
         if (queueHitCount >= 2) {
-            val queuePatterns = listOf(queuePattern1, queuePattern2)
+            val queuePatterns = listOf(
+                // 小桌A3 / 中桌B12 / 大桌C5
+                Regex("(小桌|中桌|大桌)\\s*([A-Z]{1,2}\\d{1,3}|\\d{1,3}[A-Z]{1,2})"),
+                // A3号 / A3桌 / A3台 / A3DK号（允许中间有 0~2 位噪声字母）
+                Regex("([A-Z]{1,2}\\d{1,3}|\\d{1,3}[A-Z]{1,2})(?=[A-Z]{0,2}号|\\s*(?:号|桌|台|单))")
+            )
 
             fun pickQueueCode(text: String): String? {
                 val normalized = text.replace(" ", "").replace("\n", "")
@@ -330,6 +302,7 @@ class TextRecognitionHelper(private val context: Context) {
         // 口令型取餐码全局优先（如 M707.你的脚步有力量），很多页面会把口令放在"取餐码"前面。
         val foodHintKeywords = listOf("取餐码", "取餐号", "取单码", "取单号", "取茶号", "待取餐", "当前订单")
         if (foodHintKeywords.any { mergedText.contains(it) }) {
+            val sloganPattern = Regex("([A-Z][A-Z0-9]{2,9}[.．][\\u4e00-\\u9fa5A-Za-z0-9]{2,24})")
             val fromBlocks = blocks.asSequence()
                 .map { it.text.replace(" ", "").replace("\n", "") }
                 .mapNotNull { txt -> sloganPattern.find(txt)?.groupValues?.get(1) }
@@ -347,7 +320,8 @@ class TextRecognitionHelper(private val context: Context) {
         if (detectedBrand == "星巴克" || mergedText.contains("啡快口令")) {
             for (block in blocks) {
                 val text = block.text.replace(" ", "").replace("\n", "")
-                val starbucksMatch = starbucksPattern.find(text)
+                // 匹配 "数字.文字" 或 "数字．文字" 格式
+                val starbucksMatch = Regex("(\\d{1,3}[.．][\\u4e00-\\u9fa5]{2,10})").find(text)
                 if (starbucksMatch != null) {
                     return starbucksMatch.value
                 }
@@ -366,14 +340,15 @@ class TextRecognitionHelper(private val context: Context) {
         // 第一步：精确从关键词后截取
         for (block in blocks) {
             val text = block.text.replace(" ", "").replace("\n", "")
-            val forwardMatch = foodForwardPattern.find(text)
+            val keywordPattern = "(取单码|取单号|取餐号|取餐码|取茶号|取货码|券码|订单号|取性码|取養号)"
+            val forwardMatch = Regex("$keywordPattern[:：]?([A-Z0-9]{3,10})").find(text)
             if (forwardMatch != null) {
                 val code = forwardMatch.groupValues[2]
                 if (!isInvalidFoodCode(code, text, detectedBrand)) {
                     return code
                 }
             }
-            val reverseMatch = foodReversePattern.find(text)
+            val reverseMatch = Regex("([A-Z0-9]{3,10})[:：]?$keywordPattern").find(text)
             if (reverseMatch != null) {
                 val code = reverseMatch.groupValues[1]
                 if (!isInvalidFoodCode(code, text, detectedBrand)) {
@@ -384,14 +359,14 @@ class TextRecognitionHelper(private val context: Context) {
             targetKeywordRect = block.boundingBox
             val afterKeyword = text.substringAfter(matchedKeyword).trimStart(':', '：', ' ')
             // 口令型取餐码（如 M707.你的脚步有力量）优先提取完整文本
-            val sloganCodeMatch = sloganPattern.find(afterKeyword)
+            val sloganCodeMatch = Regex("([A-Z][A-Z0-9]{2,9}[.．][\\u4e00-\\u9fa5A-Za-z0-9]{2,24})").find(afterKeyword)
             if (sloganCodeMatch != null) {
                 val sloganCode = sloganCodeMatch.groupValues[1]
                 if (!isInvalidFoodCode(sloganCode, afterKeyword, detectedBrand)) {
                     return sloganCode
                 }
             }
-            val match = foodCodeSimplePattern.find(afterKeyword)
+            val match = Regex("[A-Z0-9]{3,10}").find(afterKeyword)
             if (match != null && !foodKeywords.any { it.contains(match.value) || match.value.contains(it) }) {
                 if (!isInvalidFoodCode(match.value, afterKeyword, detectedBrand)) {
                     return match.value
@@ -404,7 +379,7 @@ class TextRecognitionHelper(private val context: Context) {
             val candidates = blocks.mapNotNull { block ->
                 val box = block.boundingBox ?: return@mapNotNull null
                 val text = block.text.replace(" ", "").replace("\n", "")
-                if (foodCodeExactPattern.matches(text) && !isInvalidFoodCode(text, text, detectedBrand)) {
+                if (Regex("^[A-Z0-9]{3,10}$").matches(text) && !isInvalidFoodCode(text, text, detectedBrand)) {
                     val dist = Math.abs((box.top + box.bottom) / 2 - (targetKeywordRect!!.top + targetKeywordRect!!.bottom) / 2)
                     if (dist < 400) text to dist else null
                 } else null
@@ -414,9 +389,10 @@ class TextRecognitionHelper(private val context: Context) {
 
         // 第三步：全文兜底按权重搜索
         if (!hasFoodKeywords) return null
+        val pattern = Regex("(?<![a-zA-Z0-9])([A-Z0-9]{3,10})(?![a-zA-Z0-9])")
         val candidates = blocks.flatMap { block ->
             val text = block.text.replace(" ", "").replace("\n", "")
-            foodFallbackBoundPattern.findAll(text).mapNotNull { match ->
+            pattern.findAll(text).mapNotNull { match ->
                 val value = match.value
                 if (value.length == 3 && value.all { it.isDigit() }) {
                     val aroundStart = (match.range.first - 6).coerceAtLeast(0)
@@ -531,8 +507,8 @@ class TextRecognitionHelper(private val context: Context) {
     private fun cleanChineseText(text: String): String {
         val cleanConfig = engine.rules.textCleaning
         var result = text
-            .replace(cachedDatetimeRegex, "")
-            .replace(cachedSpaceCollapseRegex, "")
+            .replace(Regex(cleanConfig.datetimePattern), "")
+            .replace(Regex(cleanConfig.spaceCollapse), "")
             .replace("\n", "")
         for (removal in cleanConfig.charRemovals) {
             result = result.replace(removal, "")
@@ -553,7 +529,7 @@ class TextRecognitionHelper(private val context: Context) {
             val index = result.indexOf(stop)
             if (index != -1) result = result.substring(0, index)
         }
-        return truncateSuffixPattern.replace(result, "")
+        return result.replace("[,，。！!?;？;|\\s]+$".toRegex(), "")
     }
 
     // ─────────── 纯文字识别（用于划选文字处理） ───────────
@@ -780,155 +756,11 @@ class TextRecognitionHelper(private val context: Context) {
     }
 
     /**
-     * OCR 一次 + 单码识别 + 多码识别（共享 OCR 结果，避免重复推理）
-     */
-    suspend fun recognizeAllAndMultiple(bitmap: Bitmap, sourceApp: String? = null, sourcePkg: String? = null): Pair<RecognitionResult, MultiRecognitionResult> {
-        Log.d("RecognitionMonitor", "=== recognizeAllAndMultiple 开始 ===")
-
-        // 确保 OCR 已初始化
-        var waitCount = 0
-        while (!paddleOcr.isInitialized && waitCount < 30) {
-            kotlinx.coroutines.delay(100)
-            waitCount++
-        }
-        if (!paddleOcr.isInitialized) {
-            paddleOcr.init()
-        }
-
-        // OCR 只跑一次
-        val ocrResult = paddleOcr.recognize(bitmap)
-        val rawFullText = ocrResult?.fullText ?: ""
-        val textBlocks = ocrResult?.textBlocks ?: emptyList()
-
-        // ML Kit 条码扫描
-        val image = InputImage.fromBitmap(bitmap, 0)
-        val barcodeResult = try {
-            withContext(Dispatchers.Main) { barcodeScanner.process(image).await() }
-        } catch (e: Exception) { null }
-
-        val mergedText = cleanChineseText(rawFullText)
-
-        // 单码识别（复用 OCR 结果）
-        val singleResult = recognizeAllFromOcr(rawFullText, textBlocks, mergedText, barcodeResult, sourceApp, sourcePkg)
-
-        // 多码识别（复用 OCR 结果）
-        val hasExpressKeyword = mergedText.contains("取件") || mergedText.contains("取货") ||
-            mergedText.contains("快递") || mergedText.contains("驿站") || mergedText.contains("菜鸟")
-        val multiResult = if (hasExpressKeyword || singleResult.type == "快递") {
-            recognizeMultipleCodesFromText(rawFullText, textBlocks, mergedText)
-        } else {
-            MultiRecognitionResult(emptyList(), false)
-        }
-
-        return singleResult to multiResult
-    }
-
-    /**
-     * 单码识别核心逻辑（接受预计算的 OCR 结果）
-     */
-    private suspend fun recognizeAllFromOcr(
-        rawFullText: String,
-        textBlocks: List<PaddleOcrHelper.TextBlock>,
-        mergedText: String,
-        barcodeResult: List<Barcode>?,
-        sourceApp: String?,
-        sourcePkg: String?
-    ): RecognitionResult {
-        Log.d("RecognitionMonitor", "=== recognizeAllFromOcr 开始 ===")
-        Log.d("RecognitionMonitor", "rawFullText length=${rawFullText.length}, mergedText length=${mergedText.length}")
-        Log.d("RecognitionMonitor", "mergedText preview=${mergedText.take(100)}")
-
-        val hasTakeoutKeywords = mergedText.contains("取餐") || mergedText.contains("取茶") ||
-                mergedText.contains("取件") || mergedText.contains("取性") ||
-                mergedText.contains("验证码") || mergedText.contains("券码") ||
-                mergedText.contains("订单") || mergedText.contains("准备完毕") ||
-                mergedText.contains("领取") || mergedText.contains("取件码") ||
-                mergedText.contains("取養")
-
-        val homePageElementCount = homePageKeywords.count { mergedText.contains(it) }
-        val isLikelyHomePage = homePageElementCount >= 3
-
-        var qrCode = barcodeResult?.firstOrNull()?.rawValue
-        if (qrCode != null && (qrCode.contains("http://", ignoreCase = true) || qrCode.contains("https://", ignoreCase = true))) {
-            qrCode = null
-        }
-
-        var takeoutCode: String? = null
-        var detectedBrand: String? = sourcePkg?.let { engine.getBrandByPackage(it) }
-
-        if (mergedText.contains("啡快口令")) {
-            detectedBrand = "星巴克"
-        } else if (detectedBrand == null) {
-            val brandHits = mutableMapOf<String, Int>()
-            val scoringConfig = engine.rules.scoring.brandDetection
-            for (brand in engine.getDrinkBrands() + engine.getFoodBrands()) {
-                if (brand.keywords.isNotEmpty() && brand.keywords.any { mergedText.contains(it) }) {
-                    val score = brand.scoringOverrides["exact_match_weight"] ?: scoringConfig.exactMatchWeight
-                    brandHits[brand.name] = (brandHits[brand.name] ?: 0) + score
-                }
-                if (mergedText.contains(brand.name, ignoreCase = true)) {
-                    val colonScore = if (Regex("${Regex.escape(brand.name)}[:：]\\d").containsMatchIn(mergedText)) scoringConfig.colonMatchWeight else scoringConfig.keywordMatchWeight
-                    brandHits[brand.name] = (brandHits[brand.name] ?: 0) + colonScore
-                }
-                for (alias in brand.aliases) {
-                    if (mergedText.contains(alias, ignoreCase = true)) {
-                        val colonScore = if (Regex("${Regex.escape(alias)}[:：]\\d").containsMatchIn(mergedText)) scoringConfig.colonMatchWeight else scoringConfig.keywordMatchWeight
-                        brandHits[brand.name] = (brandHits[brand.name] ?: 0) + colonScore
-                    }
-                }
-            }
-            detectedBrand = brandHits.maxByOrNull { it.value }?.key
-        }
-
-        if (detectedBrand == "KFC") detectedBrand = "肯德基"
-
-        val catConfig = engine.rules.categoryDetection
-        var category = catConfig.defaultCategory
-        if ((catConfig.drinkTriggers.brandBased && drinkBrands.contains(detectedBrand)) ||
-            catConfig.drinkTriggers.textKeywords.any { mergedText.contains(it) }
-        ) {
-            category = "饮品"
-        } else if (
-            catConfig.expressTriggers.textKeywords.any { mergedText.contains(it) } ||
-            (catConfig.expressTriggers.brandInText && expressBrandKeywords.any { mergedText.contains(it) })
-        ) {
-            category = "快递"
-        }
-
-        if (!isLikelyHomePage || category == "快递") {
-            takeoutCode = if (category == "快递") {
-                extractExpressCode(textBlocks, mergedText)
-            } else {
-                extractFoodCode(textBlocks, mergedText, detectedBrand, qrCode)
-            }
-        }
-
-        if (detectedBrand == "瑞幸" && qrCode == null) {
-            takeoutCode = null
-        }
-
-        val pickupLocation = findPickupLocation(mergedText, textBlocks)
-
-        Log.d("RecognitionMonitor", "------------------------------------")
-        Log.d("RecognitionMonitor", "Source App: $sourceApp")
-        Log.d("RecognitionMonitor", "Source Package: $sourcePkg")
-        Log.d("RecognitionMonitor", "Full Text: $mergedText")
-        Log.d("RecognitionMonitor", "Extracted Code: $takeoutCode")
-        Log.d("RecognitionMonitor", "QR Data: $qrCode")
-        Log.d("RecognitionMonitor", "Category: $category")
-        Log.d("RecognitionMonitor", "Brand: $detectedBrand")
-        Log.d("RecognitionMonitor", "Pickup Location: $pickupLocation")
-        Log.d("RecognitionMonitor", "------------------------------------")
-
-        return RecognitionResult(takeoutCode, qrCode, category, detectedBrand, rawFullText, pickupLocation)
-    }
-
-    /**
      * 多取件码识别 - 用于识别一张图片中的多个快递取件码
      */
     suspend fun recognizeMultipleCodes(bitmap: Bitmap, sourceApp: String? = null, sourcePkg: String? = null): MultiRecognitionResult {
         Log.d("RecognitionMonitor", "=== recognizeMultipleCodes 开始 ===")
-
+        
         // 确保 OCR 已初始化
         var waitCount = 0
         while (!paddleOcr.isInitialized && waitCount < 30) {
@@ -938,60 +770,99 @@ class TextRecognitionHelper(private val context: Context) {
         if (!paddleOcr.isInitialized) {
             paddleOcr.init()
         }
-
+        
+        // 使用 PaddleOCR 进行文字识别
         val ocrResult = paddleOcr.recognize(bitmap)
         val rawFullText = ocrResult?.fullText ?: ""
         val textBlocks = ocrResult?.textBlocks ?: emptyList()
+        
+        // 保留 ML Kit 条码扫描
+        val image = InputImage.fromBitmap(bitmap, 0)
+        val barcodeResult = try {
+            withContext(Dispatchers.Main) {
+                barcodeScanner.process(image).await()
+            }
+        } catch (e: Exception) { null }
+        
         val mergedText = cleanChineseText(rawFullText)
-
-        return recognizeMultipleCodesFromText(rawFullText, textBlocks, mergedText)
-    }
-
-    /**
-     * 多取件码识别 - 接受预计算的 OCR 结果（避免重复 OCR 推理）
-     */
-    fun recognizeMultipleCodesFromText(
-        rawFullText: String,
-        textBlocks: List<PaddleOcrHelper.TextBlock>,
-        mergedText: String
-    ): MultiRecognitionResult {
-        Log.d("RecognitionMonitor", "=== recognizeMultipleCodesFromText 开始 ===")
         Log.d("RecognitionMonitor", "多取件码识别 - 全文: ${mergedText.take(200)}")
-
+        
+        // 查找所有取件码和对应的快递品牌
         val orders = mutableListOf<RecognitionResult>()
-        // 取货地点只需计算一次
-        val pickupLocation = findPickupLocation(mergedText, textBlocks)
-
-        // 方法1：基于"取件码"关键词查找
-        val allForwardMatches = multiForwardPattern.findAll(mergedText).toList()
-        val allReverseMatches = multiReversePattern.findAll(mergedText).toList()
-        Log.d("RecognitionMonitor", "找到 ${allForwardMatches.size} 个正向匹配, ${allReverseMatches.size} 个反向匹配")
+        
+        // 方法1：基于"取件码"关键词查找（支持"取件码123456"和"123456取件码"两种顺序）
+        val expressKeywords = listOf("取件码", "取性码", "请凭", "靖凭")
+        val keywordPattern = expressKeywords.joinToString("|")
+        // 多码识别关键词提取：优先精确抓快递柜三段码，且必须包含数字，避免把 ZTO 这类品牌词识别成取件码。
+        val rawCodePattern =
+            "([0-9]{1,2}-[0-9]{1,2}-[0-9]{4}|[A-Z]{1,3}[0-9]{0,3}-[0-9]{3,8}|[A-Z0-9]{1,4}-[A-Z0-9]{3,8}|[A-Z]{1,3}[0-9]{4,8}|[0-9]{4,8})"
+        // 关键：加边界，避免从长运单号中截取 4-8 位尾段误当取件码
+        val codePattern = "(?<![A-Z0-9-])$rawCodePattern(?![A-Z0-9-])"
+        val forwardPattern = Regex("(?:$keywordPattern)[:：\\s]*$codePattern")
+        val reversePattern = Regex("$codePattern[:：\\s]*(?:$keywordPattern)")
+        val allForwardMatches = forwardPattern.findAll(mergedText).toList()
+        val allReverseMatches = reversePattern.findAll(mergedText).toList()
+        Log.d(
+            "RecognitionMonitor",
+            "找到 ${allForwardMatches.size} 个正向匹配, ${allReverseMatches.size} 个反向匹配"
+        )
 
         val addOrderIfValid: (String, IntRange) -> Unit = { code, range ->
             if (!isInvalidExpressCode(code) && !isLikelyPhoneTail(code, mergedText)) {
+                // 查找这个取件码对应的快递品牌
                 val brand = findBrandForCode(code, mergedText, range)
-                orders.add(RecognitionResult(code, null, "快递", brand, rawFullText, pickupLocation))
+                
+                // 查找取货地点
+                val pickupLocation = findPickupLocation(mergedText, textBlocks)
+                
+                val order = RecognitionResult(
+                    code = code,
+                    qr = null,
+                    type = "快递",
+                    brand = brand,
+                    fullText = rawFullText,
+                    pickupLocation = pickupLocation
+                )
+                orders.add(order)
+                
                 Log.d("RecognitionMonitor", "识别到取件码: $code, 品牌: $brand")
             }
         }
-        allForwardMatches.forEach { addOrderIfValid(it.groupValues[1], it.range) }
-        allReverseMatches.forEach { addOrderIfValid(it.groupValues[1], it.range) }
-
-        // 方法2：基于快递品牌名称查找
+        allForwardMatches.forEach { match ->
+            addOrderIfValid(match.groupValues[1], match.range)
+        }
+        allReverseMatches.forEach { match ->
+            addOrderIfValid(match.groupValues[1], match.range)
+        }
+        
+        // 方法2：如果方法1找到的取件码不足，尝试基于快递品牌名称查找
         if (orders.isEmpty()) {
             val expressBrands = listOf("圆通快递", "中通快递", "申通快递", "韵达快递", "顺丰快递", "极兔快递", "德邦快递")
             for (brand in expressBrands) {
                 if (mergedText.contains(brand)) {
+                    // 在品牌名称附近查找取件码
                     val brandIndex = mergedText.indexOf(brand)
                     val nearbyText = mergedText.substring(
                         maxOf(0, brandIndex - 50),
                         minOf(mergedText.length, brandIndex + brand.length + 100)
                     )
-                    val codeMatch = multiBrandCodePattern.find(nearbyText)
+                    
+                    // 查找附近的取件码
+                    val codePattern = Regex("取件码[:：\\s]*([A-Z0-9-]{3,12})")
+                    val codeMatch = codePattern.find(nearbyText)
                     if (codeMatch != null) {
                         val code = codeMatch.groupValues[1]
                         if (!isInvalidExpressCode(code) && !isLikelyPhoneTail(code, mergedText)) {
-                            orders.add(RecognitionResult(code, null, "快递", brand, rawFullText, pickupLocation))
+                            val pickupLocation = findPickupLocation(mergedText, textBlocks)
+                            val order = RecognitionResult(
+                                code = code,
+                                qr = null,
+                                type = "快递",
+                                brand = brand,
+                                fullText = rawFullText,
+                                pickupLocation = pickupLocation
+                            )
+                            orders.add(order)
                             Log.d("RecognitionMonitor", "基于品牌找到取件码: $code, 品牌: $brand")
                         }
                     }
@@ -999,36 +870,60 @@ class TextRecognitionHelper(private val context: Context) {
             }
         }
 
-        // 方法3：无关键词时基于品牌上下文提取
+        // 方法3：无"取件码"关键词时，基于快递品牌上下文提取连字符/数字码
+        // 仅在方法1/2完全找不到取件码时启用，避免把日期/运单号等数字误当成额外取件码。
         if (orders.isEmpty() && expressBrandKeywords.any { mergedText.contains(it) }) {
-            Log.d("RecognitionMonitor", "lockerPattern regex=${multiLockerPattern.pattern}")
-            Log.d("RecognitionMonitor", "mergedText full=$mergedText")
-            val allLockerMatches = multiLockerPattern.findAll(mergedText).toList()
-            Log.d("RecognitionMonitor", "lockerPattern found ${allLockerMatches.size} matches: ${allLockerMatches.map { it.value }}")
-            for (m in allLockerMatches) {
+            // 常见三段式取件码（如 40-2-7253）。mergedText 可能会把手机号尾号与取件码粘连在一起（****591440-2-7253），
+            // 这时使用带"边界"的兜底正则会漏匹配；先专门扫一遍三段数字连字符码，保证不漏。
+            val pickupLocation = findPickupLocation(mergedText, textBlocks)
+            val lockerPattern = Regex("([0-9]{1,2}-[0-9]{1,2}-[0-9]{3,5})")
+            for (m in lockerPattern.findAll(mergedText)) {
                 val code = m.groupValues[1]
-                Log.d("RecognitionMonitor", "locker candidate=$code, invalid=${isInvalidExpressCode(code)}, phoneTail=${isLikelyPhoneTail(code, mergedText)}")
                 if (isInvalidExpressCode(code)) continue
                 if (isLikelyPhoneTail(code, mergedText)) continue
                 val brand = findBrandForCode(code, mergedText, m.range)
-                orders.add(RecognitionResult(code, null, "快递", brand, rawFullText, pickupLocation))
+                orders.add(
+                    RecognitionResult(
+                        code = code,
+                        qr = null,
+                        type = "快递",
+                        brand = brand,
+                        fullText = rawFullText,
+                        pickupLocation = pickupLocation
+                    )
+                )
             }
 
-            val fallbackMatches = multiFallbackPattern.findAll(mergedText).toList()
-            Log.d("RecognitionMonitor", "fallbackPattern found ${fallbackMatches.size} matches: ${fallbackMatches.map { it.value }}")
+            // 纯数字兜底提取收紧为 5~8 位，避免把 "0003""0312" 这类日期/计数噪声识别成取件码。
+            val fallbackPattern = Regex("(?<![A-Z0-9-])([0-9]{1,2}-[0-9]{1,2}-[0-9]{3,5}|[A-Z0-9]{1,4}-[A-Z0-9]{3,8}|[0-9]{5,8})(?![A-Z0-9-])")
+            val fallbackMatches = fallbackPattern.findAll(mergedText).toList()
             for (m in fallbackMatches) {
-                val code = m.groupValues[1].ifEmpty { m.groupValues[2] }
-                Log.d("RecognitionMonitor", "fallback candidate=$code, invalid=${isInvalidExpressCode(code)}, phoneTail=${isLikelyPhoneTail(code, mergedText)}")
+                val code = m.groupValues[1]
                 if (isInvalidExpressCode(code)) continue
                 if (isLikelyPhoneTail(code, mergedText)) continue
                 val brand = findBrandForCode(code, mergedText, m.range)
-                orders.add(RecognitionResult(code, null, "快递", brand, rawFullText, pickupLocation))
+                orders.add(
+                    RecognitionResult(
+                        code = code,
+                        qr = null,
+                        type = "快递",
+                        brand = brand,
+                        fullText = rawFullText,
+                        pickupLocation = pickupLocation
+                    )
+                )
             }
         }
-
+        
+        // 去重
         val uniqueOrders = orders.distinctBy { it.code }
+        
         Log.d("RecognitionMonitor", "多取件码识别完成，共识别到 ${uniqueOrders.size} 个取件码")
-        return MultiRecognitionResult(orders = uniqueOrders, hasMultipleCodes = uniqueOrders.size > 1)
+        
+        return MultiRecognitionResult(
+            orders = uniqueOrders,
+            hasMultipleCodes = uniqueOrders.size > 1
+        )
     }
     
     /**

@@ -23,12 +23,6 @@ object RecognitionRuleEngine {
     private val compiledPatterns = mutableMapOf<String, Regex>()
     private var repository: RuleRepository? = null
 
-    // 缓存：避免每次识别都 filter+sort
-    @Volatile
-    private var cachedExpressPatterns: List<ExtractionPattern> = emptyList()
-    @Volatile
-    private var cachedTextCorrections: List<Pair<String, String>> = emptyList()
-
     suspend fun initialize(context: Context) = withContext(Dispatchers.IO) {
         AppLogger.update("RuleEngine initialize start, activeSourceId=$activeSourceId")
         repository = RuleRepository(context)
@@ -76,8 +70,6 @@ object RecognitionRuleEngine {
 
     private fun precompilePatterns() {
         compiledPatterns.clear()
-        cachedExpressPatterns = emptyList()
-        cachedTextCorrections = emptyList()
 
         _rules.codeExtraction.express.patterns.filter { it.enabled }.forEach { pattern ->
             try {
@@ -173,11 +165,7 @@ object RecognitionRuleEngine {
     }
 
     fun getTextCorrections(): List<Pair<String, String>> {
-        return cachedTextCorrections.ifEmpty {
-            _rules.textCleaning.corrections.map { it.from to it.to }.also {
-                cachedTextCorrections = it
-            }
-        }
+        return _rules.textCleaning.corrections.map { it.from to it.to }
     }
 
     fun getHomepageKeywords(): List<String> = _rules.homepageDetection.keywords
@@ -195,16 +183,8 @@ object RecognitionRuleEngine {
     fun getQueueThreshold(): Int = _rules.codeExtraction.food.queueThreshold
 
     fun getExpressPatterns(): List<ExtractionPattern> {
-        return cachedExpressPatterns.ifEmpty {
-            _rules.codeExtraction.express.patterns.filter { it.enabled }.sortedBy { it.priority }.also {
-                cachedExpressPatterns = it
-            }
-        }
+        return _rules.codeExtraction.express.patterns.filter { it.enabled }.sortedBy { it.priority }
     }
-
-    fun getLockerPattern(): String? = _rules.codeExtraction.express.lockerPattern
-
-    fun getMultiFallbackPattern(): String? = _rules.codeExtraction.express.multiFallbackPattern
 
     fun getQueuePatterns(): List<QueuePattern> {
         return _rules.codeExtraction.food.patterns.queuePatterns.filter { it.enabled }
